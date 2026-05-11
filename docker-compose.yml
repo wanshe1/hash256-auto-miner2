@@ -1,0 +1,21 @@
+services:
+  hash256:
+    image: ghcr.io/wanshe1/hash256-auto-miner:latest
+    restart: unless-stopped
+    gpus: all
+    env_file:
+      - .env
+    command:
+      - --backend
+      - cuda
+      - --cuda-devices
+      - all
+      - --loop
+      - --broadcast-all-rpcs
+      - --min-priority-gwei
+      - "8"
+      - --replace-pending
+      - "2"
+      - --poll-interval
+      - "1"
+

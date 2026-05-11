@@ -457,6 +457,9 @@ def ensure_cuda_miner() -> Path:
         cmd = [nvcc, "-O3", "-std=c++17", src.name, "-o", exe.name]
         p = run_nvcc_compile(cmd)
     if p.returncode != 0:
+        if exe.exists():
+            log("CUDA compile failed, using bundled hash256_cuda_miner.exe")
+            return exe
         raise RuntimeError((p.stderr or p.stdout or "nvcc compile failed").strip())
     return exe
 

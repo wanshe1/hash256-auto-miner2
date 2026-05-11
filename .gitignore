@@ -15,6 +15,5 @@ __pycache__/
 build/
 dist/
 *.spec
-hash256_cuda_miner.exe
 hash256_cuda_miner_driverapi.exe
 _tmp*

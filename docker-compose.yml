@@ -1,6 +1,6 @@
 services:
   hash256:
-    image: ghcr.io/wanshe1/hash256-auto-miner:latest
+    image: ghcr.io/wanshe1/hash256-auto-miner2:latest
     restart: unless-stopped
     gpus: all
     env_file:
@@ -18,4 +18,3 @@ services:
       - "2"
       - --poll-interval
       - "1"
-

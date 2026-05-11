@@ -290,6 +290,74 @@ def mine_data(nonce: int) -> str:
     return "0x" + SEL_MINE + pad32_hex(nonce)
 
 
+def parse_nonce_value(raw: str) -> int:
+    v = raw.strip()
+    if not v:
+        raise RuntimeError("missing nonce")
+    return int(v, 16) if v.lower().startswith("0x") else int(v, 10)
+
+
+def nonce_from_mine_data(data: str) -> int:
+    if not data.startswith("0x" + SEL_MINE) or len(data) != 74:
+        raise RuntimeError("not mine(uint256) calldata")
+    return int(data[10:], 16)
+
+
+def default_solutions_file() -> str:
+    return os.getenv("HASH256_SOLUTIONS_FILE") or str(app_dir() / "hash256_solutions.jsonl")
+
+
+def status_badge(status: str) -> str:
+    return {
+        "valid": "[valid]",
+        "invalid": "[invalid]",
+        "submitted": "[submitted]",
+        "failed": "[failed]",
+    }.get(status, f"[{status}]")
+
+
+def save_solution_record(
+    file_path: str,
+    status: str,
+    address: str,
+    nonce: Optional[int] = None,
+    result: Optional[str] = None,
+    challenge: Optional[int] = None,
+    difficulty: Optional[int] = None,
+    epoch: Optional[int] = None,
+    tx: str = "",
+    error: str = "",
+) -> None:
+    if nonce is None:
+        return
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = app_dir() / p
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rec: dict[str, Any] = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": status,
+        "badge": status_badge(status),
+        "address": address,
+        "nonce": "0x" + pad32_hex(nonce),
+    }
+    if result:
+        rec["result"] = result
+    if challenge is not None:
+        rec["challenge"] = "0x" + pad32_hex(challenge)
+    if difficulty is not None:
+        rec["difficulty"] = "0x" + pad32_hex(difficulty)
+    if epoch is not None:
+        rec["epoch"] = epoch
+    if tx:
+        rec["tx"] = tx
+    if error:
+        rec["error"] = error
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+    log(f"{status_badge(status)} nonce=0x{nonce:064x} saved={p}")
+
+
 def ensure_assets() -> None:
     d = assets_dir()
     d.mkdir(exist_ok=True)
@@ -775,6 +843,7 @@ def find_nonce_live(
     skip_final_check: bool,
     submit_on_final_check_fail: bool,
     zero_prefix: bool,
+    solutions_file: str,
 ) -> tuple[int, dict[str, int], int, int]:
     state, challenge, difficulty = read_target(rpc, contract, address)
     procs: list[subprocess.Popen] = []
@@ -843,6 +912,17 @@ def find_nonce_live(
                             if submit_on_final_check_fail:
                                 log("hit may be stale, aggressive submit anyway")
                             else:
+                                save_solution_record(
+                                    solutions_file,
+                                    "invalid",
+                                    address,
+                                    nonce,
+                                    str(result) if result else None,
+                                    challenge,
+                                    difficulty,
+                                    state.get("epoch"),
+                                    error="target changed before submit",
+                                )
                                 log("hit became stale before submit, discard and restart")
                                 restart(new_state, new_challenge, new_difficulty)
                                 continue
@@ -850,6 +930,17 @@ def find_nonce_live(
                         if submit_on_final_check_fail:
                             log(f"final target check failed, aggressive submit anyway: {e}")
                         else:
+                            save_solution_record(
+                                solutions_file,
+                                "invalid",
+                                address,
+                                nonce,
+                                str(result) if result else None,
+                                challenge,
+                                difficulty,
+                                state.get("epoch"),
+                                error=f"final target check failed: {e}",
+                            )
                             log(f"final target check failed, discard hit: {e}")
                             continue
                 stop_workers(procs)
@@ -1192,6 +1283,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--no-chain-cache", action="store_true", help="disable background chain state cache before signing")
     ap.add_argument("--chain-cache-interval", type=float, default=0.5, help="seconds between background chain state refreshes")
     ap.add_argument("--chain-cache-ttl", type=float, default=2.0, help="max cache age allowed for zero-rpc signing")
+    ap.add_argument("--submit-nonce", default="", help="retry submit a saved nonce, hex or decimal")
+    ap.add_argument("--solutions-file", default=default_solutions_file(), help="append nonce status records as JSONL")
     ap.add_argument("--submit-data", default="", help="直接广播已命中的 calldata，例如 0x4d474898...")
     ap.add_argument("--loop", action="store_true", help="广播成功后继续挖下一次")
     return ap.parse_args()
@@ -1213,9 +1306,19 @@ def main() -> None:
             chain_cache = None
 
     while True:
+        current_nonce: Optional[int] = None
+        current_result: Optional[str] = None
+        current_state: Optional[dict[str, int]] = None
+        current_challenge: Optional[int] = None
+        current_difficulty: Optional[int] = None
         try:
-            if args.submit_data:
+            if args.submit_nonce:
+                current_nonce = parse_nonce_value(args.submit_nonce)
+                data = mine_data(current_nonce)
+                log(f"retry submit nonce=0x{current_nonce:064x}")
+            elif args.submit_data:
                 data = args.submit_data.strip()
+                current_nonce = nonce_from_mine_data(data)
                 if not data.startswith("0x" + SEL_MINE) or len(data) != 74:
                     raise RuntimeError("submit-data 不是 mine(uint256) calldata")
                 log(f"直接提交 data={data}")
@@ -1236,8 +1339,23 @@ def main() -> None:
                     args.skip_final_check,
                     args.submit_on_final_check_fail,
                     args.zero_prefix,
+                    args.solutions_file,
                 )
+                current_nonce = nonce
+                current_state = state
+                current_challenge = challenge
+                current_difficulty = difficulty
                 data = mine_data(nonce)
+                save_solution_record(
+                    args.solutions_file,
+                    "valid",
+                    addr,
+                    nonce,
+                    current_result,
+                    challenge,
+                    difficulty,
+                    state.get("epoch"),
+                )
                 log(f"calldata={data}")
 
             txh = build_send_confirm_retry(
@@ -1262,9 +1380,20 @@ def main() -> None:
             )
 
             log(f"final tx={txh}")
+            save_solution_record(
+                args.solutions_file,
+                "submitted",
+                addr,
+                current_nonce,
+                current_result,
+                current_challenge,
+                current_difficulty,
+                current_state.get("epoch") if current_state else None,
+                tx=txh,
+            )
             print(txh)
 
-            if args.submit_data or not args.loop:
+            if args.submit_data or args.submit_nonce or not args.loop:
                 return
             time.sleep(2)
         except KeyboardInterrupt:

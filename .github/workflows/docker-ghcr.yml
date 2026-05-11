@@ -35,6 +35,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/wanshe1/hash256-auto-miner:latest
-            ghcr.io/wanshe1/hash256-auto-miner:${{ github.sha }}
-
+            ghcr.io/wanshe1/hash256-auto-miner2:latest
+            ghcr.io/wanshe1/hash256-auto-miner2:${{ github.sha }}

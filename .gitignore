@@ -7,6 +7,7 @@ wallet*.txt
 mnemonic*.txt
 seed*.txt
 *.log
+hash256_solutions.jsonl
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -17,4 +18,3 @@ dist/
 hash256_cuda_miner.exe
 hash256_cuda_miner_driverapi.exe
 _tmp*
-
